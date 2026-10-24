@@ -1,0 +1,41 @@
+{
+  "repository": "https://github.com/mdn/webassembly-examples",
+  "commit": "49a0e4ce800c64f5365e56745b53163bc252c25a",
+  "files": [
+    {
+      "path": "mdn-js-api-examples-simple.wasm",
+      "url": "https://raw.githubusercontent.com/mdn/webassembly-examples/49a0e4ce800c64f5365e56745b53163bc252c25a/js-api-examples/simple.wasm",
+      "sha256": "e2ffbd2e69e28876a64f8f4e3175b1f367033d3252fb0111e2ba74c000dc28b8"
+    },
+    {
+      "path": "mdn-js-api-examples-memory.wasm",
+      "url": "https://raw.githubusercontent.com/mdn/webassembly-examples/49a0e4ce800c64f5365e56745b53163bc252c25a/js-api-examples/memory.wasm",
+      "sha256": "55507f07d380ff8e0f686e7aafd1557ecd2d257b65f9e0f6c30247aec8be0e29"
+    },
+    {
+      "path": "mdn-js-api-examples-global.wasm",
+      "url": "https://raw.githubusercontent.com/mdn/webassembly-examples/49a0e4ce800c64f5365e56745b53163bc252c25a/js-api-examples/global.wasm",
+      "sha256": "5ca55a403cf456cc23c5f3ddb5ce0047e7f713108729f9ffdad8db4612ec98ff"
+    },
+    {
+      "path": "mdn-js-api-examples-table.wasm",
+      "url": "https://raw.githubusercontent.com/mdn/webassembly-examples/49a0e4ce800c64f5365e56745b53163bc252c25a/js-api-examples/table.wasm",
+      "sha256": "d25634083a038f043aa5665677692ef5733bf648e570b91cbef96a76a2c44c95"
+    },
+    {
+      "path": "mdn-other-examples-simple-name-section.wasm",
+      "url": "https://raw.githubusercontent.com/mdn/webassembly-examples/49a0e4ce800c64f5365e56745b53163bc252c25a/other-examples/simple-name-section.wasm",
+      "sha256": "e2ffbd2e69e28876a64f8f4e3175b1f367033d3252fb0111e2ba74c000dc28b8"
+    },
+    {
+      "path": "mdn-wasm-sobel-change.wasm",
+      "url": "https://raw.githubusercontent.com/mdn/webassembly-examples/49a0e4ce800c64f5365e56745b53163bc252c25a/wasm-sobel/change.wasm",
+      "sha256": "8d8d34cba98377784b8593a2c1d8ab51c56172bde1bafb6f78556ed198e57cdd"
+    },
+    {
+      "path": "mdn-LICENSE",
+      "url": "https://raw.githubusercontent.com/mdn/webassembly-examples/49a0e4ce800c64f5365e56745b53163bc252c25a/LICENSE",
+      "sha256": "36ffd9dc085d529a7e60e1276d73ae5a030b020313e6c5408593a6ae2af39673"
+    }
+  ]
+}

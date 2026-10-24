@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ida-wasm-decompiler"
+version = "0.3.0"
+readme = "README.md"
+description = "Independent WebAssembly decompiler for IDA Pro 9.0+"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+
+[project.scripts]
+wasm-decompile = "wasm_decompiler.__main__:main"
+
+[tool.setuptools]
+packages = ["wasm_decompiler"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
