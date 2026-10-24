@@ -20,7 +20,11 @@ platforms and later IDA releases have not been runtime-tested here.
 
 ## Installation
 
-### 1. Build the installation archive
+### 1. Get the installation archive
+
+Download the attached `ida-wasm-decompiler-0.3.0.zip` from
+[Releases](https://github.com/TheRoundRoads/ida-wasm-plugin/releases) when available,
+or build the archive from source:
 
 ```sh
 git clone https://github.com/TheRoundRoads/ida-wasm-plugin.git
@@ -187,6 +191,27 @@ Further details:
 - [C presentation and helper semantics](docs/HELPERS.md)
 - [Native Hex-Rays API boundary and IDA compatibility](docs/NATIVE_INTEGRATION.md)
 - [Validation coverage and known limits](docs/VALIDATION.md)
+
+## Future improvements
+
+These are possible directions for future releases, not features available today
+or commitments to a delivery date.
+
+| Area | Possible improvements |
+| --- | --- |
+| **Faster analysis** | Reuse function-level IR caches, invalidate only affected dependencies, and stage cross-reference indexing to shorten startup on large modules. |
+| **Improved pseudocode** | Recover more natural loops and conditionals, simplify compiler-generated state machines, reduce casts and temporary variables, and recognize more stack-frame patterns. |
+| **Debugger integration** | Add adapters for compatible Wasm runtimes to map runtime locations to pseudocode, follow execution, and inspect locals, globals, and linear memory. This requires a suitable debugger backend and address mapping. |
+| **Types and debug symbols** | Use available DWARF and language metadata to recover richer names, signatures, pointer types, and structures, including Go and Rust compiler conventions. |
+| **Memory and data navigation** | Recognize strings and constant data, annotate statically known linear-memory accesses, and expose more data references through IDA navigation. |
+| **Indirect-call recovery** | Track table entries and values across functions to resolve more call targets, while clearly distinguishing proven targets from candidates. |
+| **Modern Wasm features** | Extend decoding, validation, and decompilation to multi-value signatures, reference types, SIMD, and eventually proposals such as memory64 and GC. |
+| **Analysis workflow** | Add richer call graphs, bookmarks, pseudocode search, and local type editing while preserving renames, comments, and source navigation. |
+| **Compatibility and testing** | Expand runtime testing across IDA versions and operating systems, add fuzzing and broader execution comparisons, and automate release packaging and checksums. |
+
+Native `ida_hexrays.decompile()` support remains subject to the
+[documented backend limitation](docs/NATIVE_INTEGRATION.md); it is not implied by
+these viewer and analysis improvements.
 
 ## Development and validation
 
