@@ -1,0 +1,35 @@
+name: Release plugin
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.9'
+
+      - name: Check Python compatibility and build ZIP
+        run: |
+          python -m compileall -q ida_wasm_decompiler.py wasm_decompiler
+          python tools/package_plugin.py
+          python -m zipfile -t dist/*.zip
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="main-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" dist/*.zip \
+            --target "$GITHUB_SHA" \
+            --title "Main build #${GITHUB_RUN_NUMBER} (${GITHUB_SHA:0:7})" \
+            --notes "Automated release for commit ${GITHUB_SHA}." \
+            --latest
