@@ -39,9 +39,12 @@ This runs IDA's GUI with Qt's offscreen platform in temporary databases, then
 reopens each saved database in a fresh headless IDA process. Checks cover:
 
 - Registered actions and plugin loading through IDA's actual plugin loader; the plugin does not replace `ida_hexrays.decompile`.
+- Independent `ida_wasm_decompiler.decompile` calls before viewer initialization,
+  from an address and `ida_funcs.func_t`; pseudocode lines, printer output, batch
+  output, error handling, and reuse of the viewer's database session.
 - Every function's file-offset/database-address mapping and pseudocode source map.
 - Database function renames, instruction patches and restoration, and rejection
-  of structural metadata patches.
+  of structural metadata patches, including invalidation of API results.
 - Viewer creation, refresh, disassembly navigation, local renaming, module export,
   closing and reopening, action/hook cleanup.
 - Actual Qt Tab key events in both directions, scoped to Wasm views; Enter and

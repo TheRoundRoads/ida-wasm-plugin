@@ -1,6 +1,15 @@
 """Install this file and wasm_decompiler/ together in IDA's user plugins directory."""
 import ida_idaapi
 
+from wasm_decompiler import WasmError
+from wasm_decompiler.ida_api import (
+    WasmCFunc, WasmPrinter, WasmPseudocodeLine,
+    decompile, decompile_many, export_text, export_file,
+)
+
+__all__ = ('WasmError', 'WasmCFunc', 'WasmPrinter', 'WasmPseudocodeLine',
+           'decompile', 'decompile_many', 'export_text', 'export_file')
+
 
 class WasmDecompilerPlugin(ida_idaapi.plugin_t):
     flags = ida_idaapi.PLUGIN_FIX

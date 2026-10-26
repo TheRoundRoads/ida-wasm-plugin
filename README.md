@@ -102,6 +102,43 @@ and a **C stack pointer** override. Enter a mutable i32 global index for the sta
 pointer, or `auto` to restore automatic detection. Tab applies to Wasm disassembly
 and this plugin's viewer; other architectures and IDA widgets keep their bindings.
 
+### IDAPython decompilation API
+
+Scripts can use the installed plugin's `ida_wasm_decompiler` module without opening
+the pseudocode viewer or loading the native Hex-Rays decompiler:
+
+```python
+import ida_kernwin
+import ida_wasm_decompiler as wasm
+
+result = wasm.decompile(ida_kernwin.get_screen_ea())
+print(result)                         # C-like pseudocode
+print(result.entry_ea, result.name)
+for line in result.get_pseudocode():
+    print(line.line, line.eas)        # IDA addresses for this line
+
+printer = wasm.WasmPrinter(result)
+result.print_func(printer)
+assert printer.get_s() == result.text
+
+all_results = wasm.decompile_many()  # All defined functions
+wasm.export_file('module.c')
+```
+
+`decompile` accepts an IDA address inside a function or an `ida_funcs.func_t`.
+`decompile_many` accepts an optional iterable of those values and preserves its
+order. `export_text` returns a module document; `export_file` writes UTF-8 text.
+Invalid addresses, unsupported functions, cancellation, and non-Wasm databases
+raise `wasm.WasmError` with `code`, `offset`, and `message` attributes.
+
+The returned `WasmCFunc` is a snapshot. It exposes `text`, `function_index`,
+`symbols`, `helpers`, `diagnostics`, and `get_warnings()`. Its `source_map` maps
+1-based pseudocode lines to Wasm file offsets; `ea_map` maps those lines to IDA
+addresses. `get_pseudocode()` returns plain-text line objects with `.line`, `.ea`,
+`.eas`, and `.wasm_offsets`. `WasmPrinter` follows the native printer call pattern
+but does not provide Hex-Rays color tags or native `cfunc_t` objects. Decompile
+again after a database change to obtain a new snapshot.
+
 ### Globals and cross-references
 
 Runtime globals receive typed database identities in an owned `.wasm_globals`

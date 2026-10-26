@@ -158,6 +158,47 @@ class Session:
         self.invalidate_names()
 
 
+_shared_session = None
+_session_hooks = None
+
+
+class SessionHooks(ida_idp.IDB_Hooks):
+    """Keep the database session current for both scripts and the viewer."""
+
+    def byte_patched(self, ea, old_value):
+        if _shared_session is not None:
+            _shared_session.invalidate()
+        return 0
+
+    def renamed(self, *args):
+        if _shared_session is not None:
+            _shared_session.invalidate_names()
+        return 0
+
+    def segm_moved(self, *args):
+        if _shared_session is not None:
+            _shared_session.invalidate()
+        return 0
+
+    def closebase(self):
+        global _shared_session
+        _shared_session = None
+        return 0
+
+
+def get_session():
+    """Return the current Wasm session, including in headless IDA scripts."""
+    global _shared_session, _session_hooks
+    if ida_ida.inf_get_procname() != 'wasm':
+        raise WasmError('open a WebAssembly database first')
+    if _session_hooks is None:
+        _session_hooks = SessionHooks()
+        _session_hooks.hook()
+    if _shared_session is None:
+        _shared_session = Session()
+    return _shared_session
+
+
 KEYWORDS = re.compile(r'\b(if|else|do|while|switch|case|default|goto|return|uint8_t|uint16_t|uint32_t|uint64_t|int8_t|int16_t|int32_t|int64_t|float|double|void|break|continue)\b')
 
 
@@ -417,21 +458,6 @@ class DatabaseHooks(ida_idp.IDB_Hooks):
         super().__init__()
         self.manager = manager
 
-    def byte_patched(self, ea, old_value):
-        if self.manager.session:
-            self.manager.session.invalidate()
-        return 0
-
-    def renamed(self, *args):
-        if self.manager.session:
-            self.manager.session.invalidate_names()
-        return 0
-
-    def segm_moved(self, *args):
-        if self.manager.session:
-            self.manager.session.invalidate()
-        return 0
-
     def closebase(self):
         self.manager.close_database()
         return 0
@@ -490,10 +516,7 @@ class Manager:
         ui.attach_action_to_menu('Edit/Plugins/','wasm_decompiler:decompile',ui.SETMENU_APP)
 
     def ensure_session(self):
-        if ida_ida.inf_get_procname() != 'wasm':
-            raise WasmError('open a WebAssembly database first')
-        if self.session is None:
-            self.session = Session()
+        self.session = get_session()
         return self.session
 
     def owns(self, widget):

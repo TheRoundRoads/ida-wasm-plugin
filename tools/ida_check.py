@@ -13,6 +13,7 @@ original_native_decompile = ida_hexrays.decompile
 
 import ida_auto
 import ida_bytes
+import ida_funcs
 import ida_idaapi
 import ida_kernwin as ui
 import ida_loader
@@ -26,13 +27,41 @@ report = {'checks':[]}
 manager = None
 try:
     ida_auto.auto_wait()
-    from wasm_decompiler.ida_plugin import Manager,Session
+    import ida_wasm_decompiler as wasm_api
+    from wasm_decompiler.ida_plugin import Manager,Session,get_session
+    api_session = get_session()
+    first_defined = next(f for f in api_session.module.functions if not f.imported)
+    api_ea = api_session.ea(first_defined.code_offset)
+    api_result = wasm_api.decompile(api_ea)
+    assert api_result.entry_ea == api_ea
+    assert api_result.function_index == first_defined.index
+    assert str(api_result) == api_result.text
+    assert api_result.get_warnings() == api_result.diagnostics
+    assert [line.line for line in api_result.get_pseudocode()] == api_result.text.splitlines()
+    assert any(line.eas for line in api_result.get_pseudocode())
+    assert wasm_api.decompile(ida_funcs.get_func(api_ea)).text == api_result.text
+    printer = wasm_api.WasmPrinter(api_result)
+    assert api_result.print_func(printer) is None and printer.get_s() == api_result.text
+    assert wasm_api.decompile_many([api_ea])[0].text == api_result.text
+    assert api_result.name in wasm_api.export_text([api_ea])
+    api_export = Path(os.environ['WASM_TEST_REPORT']).with_suffix('.api.c')
+    assert wasm_api.export_file(api_export, [api_ea]) == api_export
+    assert api_result.name in api_export.read_text()
+    for line, offsets in api_result.source_map.items():
+        assert api_result.ea_map[line] == tuple(api_session.ea(offset) for offset in offsets)
+    try:
+        wasm_api.decompile(ida_idaapi.BADADDR)
+        raise AssertionError('invalid address accepted')
+    except wasm_api.WasmError:
+        pass
+    report['checks'].append('headless IDAPython decompilation API and text facade')
     manager = Manager()
     manager.install()
     assert ida_hexrays.decompile is original_native_decompile
     report['checks'].append('actions registered')
     assert ui.get_action_label('wasm_decompiler:decompile')
     session = manager.ensure_session()
+    assert session is api_session
     if os.environ.get('WASM_TEST_REOPEN') == '1':
         assert any('persisted_local' in names.values() for names in session.settings['locals'].values())
         report['checks'].append('saved database reopened with settings')
@@ -72,6 +101,9 @@ try:
     ea = session.ea(f.code_offset)
     assert ida_name.set_name(ea,'integration_renamed',ida_name.SN_CHECK)
     assert session.result(index).name == 'integration_renamed'
+    assert wasm_api.decompile(ea).name == 'integration_renamed'
+    if index == api_result.function_index and os.environ.get('WASM_TEST_REOPEN') != '1':
+        assert api_result.name != 'integration_renamed'
     report['checks'].append('database rename invalidates names')
     owned_before = [(x.frm,x.to,x.type) for gi in range(len(session.module.globals))
                     for x in idautils.XrefsTo(session.symbols.global_ea(gi),0) if x.frm==ea]
@@ -82,12 +114,18 @@ try:
     original = ida_bytes.get_byte(ea)
     ida_bytes.patch_byte(ea,0xfd)
     assert not session.result(index).success
+    try:
+        wasm_api.decompile(ea)
+        raise AssertionError('unsupported instruction accepted by API')
+    except wasm_api.WasmError as exc:
+        assert exc.code == 'unsupported'
     for frm,to,xtype in owned_before:
         assert not any(x.frm==frm for x in idautils.XrefsTo(to,0))
     if retained_user_ref:
         assert any(x.frm==retained_user_ref[0] for x in idautils.XrefsTo(retained_user_ref[1],0))
     ida_bytes.patch_byte(ea,original)
     assert session.result(index).success
+    assert wasm_api.decompile(ea).text
     for frm,to,xtype in owned_before:
         assert any(x.frm==frm and x.type==xtype for x in idautils.XrefsTo(to,0))
     report['checks'].append('byte patch invalidation, owned xref replacement and user xref preservation')
@@ -281,6 +319,7 @@ try:
     report['checks'].append('netnode settings and original module persistence')
     manager.uninstall()
     manager = None
+    assert wasm_api.decompile(ea).text
     report['checks'].append('action and hook cleanup')
     # Exercise the actual plugin entry point through IDA's plugin loader.
     plugin = ida_loader.load_plugin(str(ROOT/'ida_wasm_decompiler.py'))

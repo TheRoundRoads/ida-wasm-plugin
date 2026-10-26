@@ -2,8 +2,10 @@
 
 This plugin remains an independent Wasm decompiler and custom IDA viewer.
 It **does not** make `ida_hexrays.decompile(wasm_ea)` return a `cfunc_t` or
-`cfuncptr_t`. It does not replace that function, manufacture text proxies, change
-the database processor to x86, or claim that its IR is Hex-Rays ctree.
+`cfuncptr_t`. It does not replace that function, change the database processor
+to x86, or claim that its IR is Hex-Rays ctree. The separate
+`ida_wasm_decompiler.decompile(ea)` API returns a Wasm-specific text and metadata
+snapshot with selected familiar methods, not a native Hex-Rays object.
 
 This boundary was investigated explicitly in IDA Pro 9.0 using the same installed
 native engine for two inputs:
