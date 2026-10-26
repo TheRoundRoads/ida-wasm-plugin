@@ -215,6 +215,10 @@ these viewer and analysis improvements.
 
 ## Development and validation
 
+Routine changes go to `develop`. Open pull requests against `develop`, and merge
+into `main` only for major updates. Each push to `main` builds the installation
+ZIP and publishes a GitHub release.
+
 Core tests require **pytest**, **WABT** (`wat2wasm`, `wasm-interp`), and a **C
 compiler**. Install those with your environment's package manager, then run:
 
