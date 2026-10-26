@@ -275,7 +275,9 @@ def export_text(module, results, names=None, global_names=None):
     global_names = global_names or {}
     lines = ['/* C-like Wasm pseudocode. Memory accesses denote checked little-endian linear memory. */', '#include <stdint.h>', '']
     for i,g in enumerate(module.globals):
-        lines.append(f'{C_TYPES[g["type"]]} {global_names.get(i, f'global_{i}')}; /* '+('imported' if g['imported'] else f'initializer: {g["init"]}')+' */')
+        name = global_names.get(i, f'global_{i}')
+        comment = 'imported' if g['imported'] else f'initializer: {g["init"]}'
+        lines.append(f'{C_TYPES[g["type"]]} {name}; /* {comment} */')
     lines.extend(prototype(module,f,fnames)+';' for f in module.functions)
     for result in results:
         lines.append('')
