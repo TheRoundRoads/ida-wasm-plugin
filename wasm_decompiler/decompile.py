@@ -26,13 +26,16 @@ class Result:
     diagnostics: list = field(default_factory=list)
     helpers: list = field(default_factory=list)
     statements: list = field(default_factory=list, repr=False)
+    display_lines: dict = field(default_factory=dict, repr=False)
+    number_spans: dict = field(default_factory=dict, repr=False)
 
     @property
     def success(self):
         return not any(d['code'] != 'info' for d in self.diagnostics)
 
     def to_dict(self):
-        return {k:getattr(self,k) for k in self.__dataclass_fields__ if k != 'statements'}
+        return {k:getattr(self,k) for k in self.__dataclass_fields__
+                if k not in ('statements','display_lines','number_spans')}
 
 
 def function_names(module, overrides=None):
@@ -40,10 +43,13 @@ def function_names(module, overrides=None):
     return unique_names([overrides.get(f.index, f.name or f'func_{f.index}') for f in module.functions])
 
 
-def prototype(module, f, names, locals_=None):
+def prototype(module, f, names, locals_=None, display_types=None):
     sig = module.signature(f)
-    args = ', '.join(f'{C_TYPES[t]} {(locals_ or [f"arg_{i}" for i in range(len(sig.params))])[i]}' for i,t in enumerate(sig.params)) or 'void'
-    return f'{C_TYPES[sig.results[0]] if sig.results else "void"} {names[f.index]}({args})'
+    display_types = display_types or {}
+    local_types = display_types.get('locals', {}).get(str(f.index), {})
+    args = ', '.join(f'{local_types.get(str(i), C_TYPES[t])} {(locals_ or [f"arg_{i}" for i in range(len(sig.params))])[i]}' for i,t in enumerate(sig.params)) or 'void'
+    result_type = display_types.get('returns', {}).get(str(f.index))
+    return f'{result_type or (C_TYPES[sig.results[0]] if sig.results else "void")} {names[f.index]}({args})'
 
 
 def decompile_function(module, index, options=None, names=None, local_names=None, cancelled=lambda: False):
@@ -53,7 +59,11 @@ def decompile_function(module, index, options=None, names=None, local_names=None
     names = function_names(module, names)
     f, result = module.functions[index], Result(index, names[index])
     if f.imported:
-        result.text = prototype(module, f, names) + '; /* imported */'
+        sig = module.signature(f)
+        params = unique_names([(local_names or {}).get(i, f.local_names.get(i, f'arg_{i}'))
+                               for i in range(len(sig.params))], reserved=names)
+        result.text = prototype(module, f, names, params) + '; /* imported */'
+        result.symbols = {name: {'kind': 'local', 'index': i} for i, name in enumerate(params)}
         return result
     try:
         analysis = analyze(module, f, cancelled)
@@ -270,15 +280,17 @@ def decompile_module(module, options=None, names=None, cancelled=lambda: False):
     return results
 
 
-def export_text(module, results, names=None, global_names=None):
+def export_text(module, results, names=None, global_names=None, display_types=None):
     fnames = function_names(module, names)
     global_names = global_names or {}
+    display_types = display_types or {}
     lines = ['/* C-like Wasm pseudocode. Memory accesses denote checked little-endian linear memory. */', '#include <stdint.h>', '']
     for i,g in enumerate(module.globals):
         name = global_names.get(i, f'global_{i}')
         comment = 'imported' if g['imported'] else f'initializer: {g["init"]}'
-        lines.append(f'{C_TYPES[g["type"]]} {name}; /* {comment} */')
-    lines.extend(prototype(module,f,fnames)+';' for f in module.functions)
+        typ = display_types.get('globals', {}).get(str(i), C_TYPES[g['type']])
+        lines.append(f'{typ} {name}; /* {comment} */')
+    lines.extend(prototype(module,f,fnames,display_types=display_types)+';' for f in module.functions)
     for result in results:
         lines.append('')
         lines.extend(f'/* {d["code"]} at 0x{d["offset"]:x}: {d["message"].replace("*/", "* /")} */' for d in result.diagnostics)

@@ -6,7 +6,6 @@ import ida_funcs
 import ida_idaapi
 
 from . import WasmError
-from .decompile import export_text as render_module
 from .ida_plugin import get_session
 
 
@@ -129,7 +128,7 @@ def export_text(funcs=None):
     """Render selected functions and module declarations as one text document."""
     session = get_session()
     results = [_result(session, index) for index in _indices(session, funcs)]
-    return render_module(session.module, results, session.names(), session.global_names())
+    return session.render_export(results)
 
 
 def export_file(path, funcs=None):

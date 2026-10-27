@@ -19,6 +19,8 @@ import ida_netnode
 import ida_segment
 
 from . import parse_module, WasmError, Options, decompile_function, export_text
+from .decompile import C_TYPES
+from .display import apply_display
 from .navigation import identifier_at, symbol_at
 from .ida_database import DatabaseSymbols
 
@@ -28,6 +30,9 @@ class Session:
         self.node = ida_netnode.netnode('$ ida-wasm-decompiler', 0, True)
         saved = self.node.getblob(0, 'S')
         self.settings = json.loads(saved.decode('utf-8')) if saved else {'locals':{}, 'stack_pointer':None}
+        self.settings.setdefault('display_types', {})
+        self.settings.setdefault('comments', {})
+        self.settings.setdefault('number_formats', {})
         cached = self.node.getblob(0, 'M')
         if cached:
             self.original = zlib.decompress(cached)
@@ -145,8 +150,17 @@ class Session:
                 elif symbol['kind'] == 'function':
                     symbol['ea'] = self.symbols.function_ea(symbol['index'])
                 symbols[name] = symbol
-            self.cache[key] = replace(result,text=text,symbols=symbols)
+            self.cache[key] = apply_display(replace(result,text=text,symbols=symbols),
+                                            self.module,self.settings)
         return self.cache[key]
+
+    def render_export(self, results):
+        return export_text(self.module, results, self.names(), self.global_names(),
+                           self.settings['display_types'])
+
+    def save_display(self):
+        self.save()
+        self.cache.clear()
 
     def invalidate_names(self):
         self._names, self._global_names = None, None
@@ -220,10 +234,12 @@ def colorize(line):
 
 
 class Viewer(ui.simplecustviewer_t):
-    def __init__(self, manager, index):
+    def __init__(self, manager, index, extra=False):
         super().__init__()
         self.manager, self.index, self.result = manager,index,None
+        self.extra = extra
         self.line_map = {}
+        self.text_start = 0
         self.history, self.future = [], []
 
     def navigate(self, index, record=True, position=None):
@@ -231,9 +247,11 @@ class Viewer(ui.simplecustviewer_t):
         if index != previous and record:
             self.history.append((previous,self.GetPos()))
             self.future.clear()
-        self.manager.views.pop(previous,None)
+        if not self.extra and self.manager.views.get(previous) is self:
+            self.manager.views.pop(previous,None)
         self.index = index
-        self.manager.views[index] = self
+        if not self.extra:
+            self.manager.views[index] = self
         self.refresh_result()
         if position:
             self.Jump(*position)
@@ -271,14 +289,14 @@ class Viewer(ui.simplecustviewer_t):
                 return None,None
         return None,None
 
-    def follow(self, mouse=False):
+    def follow(self, mouse=False, new_window=False):
         name,symbol = self.resolve_symbol(mouse)
         if symbol and symbol['kind'] == 'function':
             position = self.GetPos()
             offsets = self.line_map.get(position[0],[]) if position else []
             if offsets:
                 self.manager.disassembly_ea = self.manager.session.ea(offsets[0])
-            self.manager.open_function(symbol['index'])
+            self.manager.open_function(symbol['index'], new_window=new_window, source=self)
         elif symbol and symbol['kind'] == 'global':
             self.manager.show_disassembly(symbol['ea'])
         elif symbol and symbol['kind'] == 'local':
@@ -328,7 +346,8 @@ class Viewer(ui.simplecustviewer_t):
             self.manager.navigate_address(source)
 
     def create(self):
-        if not self.Create('Wasm pseudocode'):
+        title = 'Wasm pseudocode' if not self.extra else f'Wasm pseudocode #{self.manager.next_view_id}'
+        if not self.Create(title):
             return False
         self.refresh_result()
         return True
@@ -340,6 +359,7 @@ class Viewer(ui.simplecustviewer_t):
             self.ClearLines()
             diagnostics = [f'// {d["code"]}: {d["message"]} (0x{d["offset"]:x})' for d in self.result.diagnostics]
             lines = ['// Tab: disassembly  Enter/double-click: follow  G: go to  X: xrefs  Esc: back'] + diagnostics
+            self.text_start = len(lines)
             self.line_map = {len(lines)+line-1:offsets for line,offsets in self.result.source_map.items()}
             for line in lines + self.result.text.splitlines():
                 self.AddLine(colorize(line))
@@ -380,7 +400,93 @@ class Viewer(ui.simplecustviewer_t):
             session.settings['locals'].setdefault(str(self.index),{})[str(symbol['index'])] = name
             session.save()
         session.invalidate_names()
-        self.refresh_result()
+        self.manager.refresh_views()
+
+    def selected_line(self):
+        position = self.GetPos()
+        if not position:
+            return None, None
+        line = position[0] - self.text_start + 1
+        return self.result.display_lines.get(line), line
+
+    def change_type(self):
+        name, symbol = self.resolve_symbol()
+        session = self.manager.session
+        types = session.settings['display_types']
+        if symbol and symbol['kind'] == 'global':
+            target = types.setdefault('globals', {})
+            key = str(symbol['index'])
+            original = C_TYPES[session.module.globals[symbol['index']]['type']]
+        elif symbol and symbol['kind'] == 'local':
+            target = types.setdefault('locals', {}).setdefault(str(self.index), {})
+            key = str(symbol['index'])
+            function = session.module.functions[self.index]
+            signature = session.module.signature(function)
+            local_types = list(signature.params) + list(function.locals)
+            original = C_TYPES[local_types[symbol['index']]]
+        else:
+            target = types.setdefault('returns', {})
+            function_index = symbol['index'] if symbol and symbol['kind'] == 'function' else self.index
+            key = str(function_index)
+            signature = session.module.signature(session.module.functions[function_index])
+            original = C_TYPES[signature.results[0]] if signature.results else 'void'
+        value = ui.ask_str(target.get(key, original), 0, 'Display type (pseudocode only)')
+        if value is None:
+            return
+        value = value.strip()
+        if not value or '\n' in value or ';' in value or '/*' in value or '//' in value:
+            ui.warning('Enter one C type.')
+            return
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9\s*]*', value):
+            ui.warning('Enter a C type name with optional qualifiers and pointer stars.')
+            return
+        if value == original:
+            target.pop(key, None)
+        else:
+            target[key] = value
+        session.save_display()
+        self.manager.refresh_views()
+
+    def comment(self, kind):
+        base_line, _ = self.selected_line()
+        if base_line is None:
+            return
+        session = self.manager.session
+        comments = session.settings['comments'].setdefault(str(self.index), {})
+        entry = comments.setdefault(str(base_line), {})
+        value = ui.ask_text(4096, entry.get(kind, ''), 'Block comment' if kind == 'block' else 'Indented comment')
+        if value is None:
+            return
+        if value.strip():
+            entry[kind] = value.strip()
+        else:
+            entry.pop(kind, None)
+            if not entry:
+                comments.pop(str(base_line), None)
+        session.save_display()
+        self.manager.refresh_views()
+
+    def format_literal(self, mode):
+        position = self.GetPos()
+        if not position:
+            return
+        _, line = self.selected_line()
+        spans = self.result.number_spans.get(line, ())
+        hit = next((span for span in spans if span[0] <= position[1] < span[1]), None)
+        if not hit:
+            ui.msg('Wasm decompiler: place the cursor on an integer literal.\n')
+            return
+        _, _, base_line, ordinal, value, raw = hit
+        if mode == 'char' and not (value in (0, 9, 10, 13, 39, 92) or 32 <= value < 127):
+            ui.msg('Wasm decompiler: this value has no printable character representation.\n')
+            return
+        formats = self.manager.session.settings['number_formats'].setdefault(str(self.index), {})
+        key = f'{base_line}:{ordinal}'
+        current = formats.get(key, {}).get('mode', 'hex' if raw.lower().startswith('0x') else 'dec')
+        selected = ('dec' if current == 'hex' else 'hex') if mode == 'toggle' else mode
+        formats[key] = {'value': value, 'mode': selected}
+        self.manager.session.save_display()
+        self.manager.refresh_views()
 
     def OnDblClick(self, shift):
         try:
@@ -394,14 +500,26 @@ class Viewer(ui.simplecustviewer_t):
             if key == 9:
                 self.manager.toggle(self.GetWidget())
             elif key == 13:
-                self.follow()
+                self.follow(new_window=bool(shift & ui.VES_CTRL))
             elif key == 37 and shift & ui.VES_ALT:
                 self.back()
             elif key == 39 and shift & ui.VES_ALT:
                 self.back(forward=True)
-            elif key == ord('R'):
+            elif key == ui.IK_F5 and shift & ui.VES_CTRL:
+                self.manager.export_selection(self.GetWidget())
+            elif key == ui.IK_F5:
                 self.manager.session.invalidate()
-                self.refresh_result()
+                self.manager.refresh_views()
+            elif key == ord('Y'):
+                self.change_type()
+            elif key == ord('/'):
+                self.comment('indented')
+            elif key == ui.IK_INSERT:
+                self.comment('block')
+            elif key == ord('H'):
+                self.format_literal('toggle')
+            elif key == ord('R'):
+                self.format_literal('char')
             elif key == ord('G'):
                 self.goto_address()
             elif key == ord('J'):
@@ -422,11 +540,14 @@ class Viewer(ui.simplecustviewer_t):
         return True
 
     def OnPopup(self, widget, popup):
-        for action in ('decompile','back','forward','refresh','goto','xrefs','jump','rename','export','export_module','stack_pointer'):
+        for action in ('decompile','back','forward','refresh','goto','xrefs','jump','rename','type','comment','block_comment','hex','character','export','export_module','stack_pointer'):
             ui.attach_action_to_popup(widget,popup,'wasm_decompiler:'+action)
 
     def OnClose(self):
-        self.manager.views.pop(self.index,None)
+        if self.extra:
+            self.manager.extra_views.discard(self)
+        elif self.manager.views.get(self.index) is self:
+            self.manager.views.pop(self.index,None)
         if self.manager.viewer is self:
             self.manager.viewer = None
 
@@ -446,9 +567,10 @@ class Handler(ui.action_handler_t):
     def update(self, ctx):
         if ida_ida.inf_get_procname() != 'wasm':
             return ui.AST_DISABLE_FOR_WIDGET
-        if self.action == 'decompile':
-            widget = getattr(ctx,'widget',None)
-            if not self.manager.owns(widget) and (not widget or ui.get_widget_type(widget) != ui.BWN_DISASM):
+        widget = getattr(ctx,'widget',None)
+        if not self.manager.owns(widget):
+            allowed = self.action in ('decompile', 'refresh', 'export_module', 'stack_pointer')
+            if not allowed or not widget or ui.get_widget_type(widget) != ui.BWN_DISASM:
                 return ui.AST_DISABLE_FOR_WIDGET
         return ui.AST_ENABLE_FOR_WIDGET
 
@@ -473,18 +595,36 @@ class UIHooks(ui.UI_Hooks):
         if name == 'wasm_decompiler:decompile' or ida_ida.inf_get_procname() != 'wasm':
             return 0
         widget = ui.get_current_widget()
-        if self.manager.owns(widget):
-            handlers = {'JumpAsk':self.manager.viewer.goto_address,
-                        'JumpOpXref':self.manager.viewer.xrefs,
-                        'JumpEnter':self.manager.viewer.follow,
-                        'MakeName':self.manager.viewer.rename}
+        view = self.manager.view_for(widget)
+        shortcut = ui.get_action_shortcut(name)
+        if not name.startswith('wasm_decompiler:') and widget and (view or ui.get_widget_type(widget) == ui.BWN_DISASM):
+            if shortcut == 'F5':
+                self.manager.dispatch('refresh', type('Context', (), {'widget': widget})())
+                return 1
+            if shortcut == 'Ctrl+F5':
+                self.manager.export_selection(widget)
+                return 1
+            if view:
+                shortcuts = {'Y': view.change_type, '/': lambda: view.comment('indented'),
+                             'Ins': lambda: view.comment('block'), 'H': lambda: view.format_literal('toggle'),
+                             'R': lambda: view.format_literal('char'),
+                             'Ctrl+Enter': lambda: view.follow(new_window=True)}
+                if shortcut in shortcuts:
+                    shortcuts[shortcut]()
+                    return 1
+        if view:
+            handlers = {'JumpAsk':view.goto_address,
+                        'JumpOpXref':view.xrefs,
+                        'JumpEnter':view.follow,
+                        'MakeName':view.rename,
+                        'ChangeType':view.change_type}
             if name in handlers:
                 try:
                     handlers[name]()
                 except (WasmError,OSError) as exc:
                     ui.warning(str(exc))
                 return 1
-        if ui.get_action_shortcut(name) == 'Tab' and widget and (self.manager.owns(widget) or ui.get_widget_type(widget) == ui.BWN_DISASM):
+        if shortcut == 'Tab' and widget and (self.manager.owns(widget) or ui.get_widget_type(widget) == ui.BWN_DISASM):
             try:
                 self.manager.toggle(widget)
             except (WasmError,OSError) as exc:
@@ -500,15 +640,18 @@ class UIHooks(ui.UI_Hooks):
 class Manager:
     def __init__(self):
         self.session, self.views, self.actions = None,{},[]
+        self.extra_views = set()
+        self.next_view_id = 0
         self.viewer, self.disassembly = None,None
         self.disassembly_ea = ida_idaapi.BADADDR
         self.dbhooks, self.uihooks = DatabaseHooks(self),UIHooks(self)
 
     def install(self):
-        actions = {'decompile':'Toggle Wasm pseudocode/disassembly','back':'Previous pseudocode location','forward':'Next pseudocode location','refresh':'Refresh pseudocode','jump':'Jump to current Wasm instruction','goto':'Go to address or symbol','xrefs':'Cross-references to symbol','rename':'Rename symbol','export':'Export function pseudocode','export_module':'Export module pseudocode','stack_pointer':'Configure C stack pointer'}
+        actions = {'decompile':'Toggle Wasm pseudocode/disassembly','back':'Previous pseudocode location','forward':'Next pseudocode location','refresh':'Refresh pseudocode','jump':'Jump to current Wasm instruction','goto':'Go to address or symbol','xrefs':'Cross-references to symbol','rename':'Rename symbol','type':'Change displayed type','comment':'Add indented comment','block_comment':'Add block comment','hex':'Toggle hexadecimal literal','character':'Display literal as character','export':'Export function pseudocode','export_module':'Export module pseudocode','stack_pointer':'Configure C stack pointer'}
         for action,label in actions.items():
             name = 'wasm_decompiler:'+action
-            desc = ui.action_desc_t(name,label,Handler(self,action),'Tab' if action == 'decompile' else None)
+            shortcut = 'Tab' if action == 'decompile' else 'F5' if action == 'refresh' else 'Ctrl+F5' if action == 'export_module' else None
+            desc = ui.action_desc_t(name,label,Handler(self,action),shortcut)
             if ui.register_action(desc):
                 self.actions.append(name)
         self.dbhooks.hook()
@@ -520,26 +663,47 @@ class Manager:
         return self.session
 
     def owns(self, widget):
-        return bool(widget and self.viewer and self.viewer.GetWidget() == widget)
+        return self.view_for(widget) is not None
 
-    def open_function(self, index):
+    def all_views(self):
+        return list(dict.fromkeys(list(self.views.values()) + list(self.extra_views)))
+
+    def view_for(self, widget):
+        return next((view for view in self.all_views() if widget and view.GetWidget() == widget), None)
+
+    def refresh_views(self):
+        for view in self.all_views():
+            view.refresh_result()
+
+    def open_function(self, index, new_window=False, source=None):
         self.ensure_session()
-        if self.viewer is None:
+        if new_window:
+            self.next_view_id += 1
+            view = Viewer(self,index,extra=True)
+            if not view.create():
+                raise WasmError('could not create pseudocode viewer')
+            self.extra_views.add(view)
+        elif source and source.extra:
+            view = source
+            view.navigate(index)
+        elif self.viewer is None:
             view = Viewer(self,index)
             if not view.create():
                 raise WasmError('could not create pseudocode viewer')
             self.viewer = view
             self.views[index] = view
         else:
-            self.viewer.navigate(index)
-        self.viewer.Show()
-        ui.activate_widget(self.viewer.GetWidget(), True)
+            view = self.viewer
+            view.navigate(index)
+        view.Show()
+        ui.activate_widget(view.GetWidget(), True)
+        return view
 
     def toggle(self, widget=None):
         widget = widget or ui.get_current_widget()
         session = self.ensure_session()
         if self.owns(widget):
-            viewer = self.viewer
+            viewer = self.view_for(widget)
             position = viewer.GetPos()
             offsets = viewer.line_map.get(position[0],[]) if position else []
             f = session.module.functions[viewer.index]
@@ -600,13 +764,19 @@ class Manager:
     def dispatch(self, action, ctx):
         session = self.ensure_session()
         widget = getattr(ctx,'widget',None)
-        view = next((v for v in self.views.values() if v.GetWidget() == widget),None)
+        view = self.view_for(widget)
         if action == 'decompile':
             self.toggle(widget)
         elif action in ('back','forward') and view:
             view.back(forward=action == 'forward')
         elif action == 'export_module':
-            self.export(None)
+            self.export_selection(widget)
+        elif action == 'refresh':
+            session.invalidate()
+            if view:
+                self.refresh_views()
+            elif widget and ui.get_widget_type(widget) == ui.BWN_DISASM:
+                self.toggle(widget)
         elif action == 'stack_pointer':
             value = ui.ask_str(str(session.settings.get('stack_pointer') if session.settings.get('stack_pointer') is not None else 'auto'),0,'C stack pointer global index, or auto')
             if value is not None:
@@ -616,13 +786,9 @@ class Manager:
                 session.settings['stack_pointer'] = idx
                 session.save()
                 session.invalidate()
-                for v in list(self.views.values()):
-                    v.refresh_result()
+                self.refresh_views()
         elif view:
-            if action == 'refresh':
-                session.invalidate()
-                view.refresh_result()
-            elif action == 'jump':
+            if action == 'jump':
                 view.jump()
             elif action == 'goto':
                 view.goto_address()
@@ -630,10 +796,34 @@ class Manager:
                 view.xrefs()
             elif action == 'rename':
                 view.rename()
+            elif action == 'type':
+                view.change_type()
+            elif action == 'comment':
+                view.comment('indented')
+            elif action == 'block_comment':
+                view.comment('block')
+            elif action == 'hex':
+                view.format_literal('toggle')
+            elif action == 'character':
+                view.format_literal('char')
             elif action == 'export':
                 self.export(view)
 
-    def export(self, view):
+    def export_selection(self, widget):
+        session = self.ensure_session()
+        selected = ui.read_range_selection(widget) if widget else None
+        if selected and selected[0]:
+            start, end = selected[1:]
+            if start != ida_idaapi.BADADDR and end != ida_idaapi.BADADDR and start < end:
+                indices = [f.index for f in session.module.functions if not f.imported
+                           and session.ea(f.code_offset) < end
+                           and session.ea(f.code_offset + len(f.code) - 1) >= start]
+                if indices:
+                    self.export(indices=indices)
+                    return
+        self.export()
+
+    def export(self, view=None, indices=None):
         session = self.ensure_session()
         path = ui.ask_file(True,'*.c','Export Wasm pseudocode')
         if not path:
@@ -641,7 +831,7 @@ class Manager:
         ui.show_wait_box('Decompiling WebAssembly; Cancel stops export')
         try:
             session.update()
-            indices = [view.index] if view else range(len(session.module.functions))
+            indices = indices if indices is not None else [view.index] if view else range(len(session.module.functions))
             results = []
             for index in indices:
                 if ui.user_cancelled():
@@ -649,16 +839,17 @@ class Manager:
                 results.append(session.result(index))
             if ui.user_cancelled():
                 raise WasmError('export cancelled',code='cancelled')
-            Path(path).write_text(export_text(session.module,results,session.names(),session.global_names()),encoding='utf-8')
+            Path(path).write_text(session.render_export(results),encoding='utf-8')
             failures = sum(not r.success for r in results)
             ui.msg(f'Wasm decompiler: exported {len(results)} functions to {path}; {failures} failed (diagnostics included).\n')
         finally:
             ui.hide_wait_box()
 
     def close_database(self):
-        for view in list(self.views.values()):
+        for view in self.all_views():
             view.Close()
         self.views.clear()
+        self.extra_views.clear()
         self.viewer, self.disassembly = None,None
         self.disassembly_ea = ida_idaapi.BADADDR
         self.session = None

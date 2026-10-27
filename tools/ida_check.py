@@ -145,7 +145,7 @@ try:
         viewer = manager.views[index]
         assert viewer.GetWidget()
         assert viewer.Count() > 1
-        viewer.OnKeydown(ord('R'),0)
+        viewer.OnKeydown(ui.IK_F5,0)
         # Follow a known mapped line into disassembly.
         line = next(iter(viewer.line_map))
         viewer.Jump(line,0,0)
@@ -182,6 +182,10 @@ try:
         QApplication.processEvents()
         assert ui.get_widget_type(ui.get_current_widget()) == ui.BWN_DISASM, 'Tab did not return to disassembly'
         report['checks'].append('real Tab key toggles both directions')
+        QApplication.sendEvent(qt_disassembly.focusWidget() or qt_disassembly,QKeyEvent(QEvent.KeyPress,Qt.Key_F5,Qt.NoModifier))
+        QApplication.processEvents()
+        assert manager.owns(ui.get_current_widget()), 'F5 did not open Wasm pseudocode'
+        report['checks'].append('real F5 key opens Wasm pseudocode from disassembly')
         # Resolve actual rendered identifier columns. Never mock GetCurrentWord:
         # the real API returns whitespace chunks such as `_f1387(0);`.
         def point_at(name, require_call=False):
@@ -226,10 +230,57 @@ try:
             assert viewer.index == target and manager.viewer is viewer
             viewer.OnKeydown(37,ui.VES_ALT)
             assert viewer.index == caller
+            point_at(target_name,True)
+            viewer.OnKeydown(13,ui.VES_CTRL)
+            assert viewer.index == caller and len(manager.extra_views) == 1
+            extra = next(iter(manager.extra_views))
+            assert extra.index == target and extra.GetWidget() != viewer.GetWidget()
+            extra.Close()
+            assert not manager.extra_views
             if original_name:
                 assert ida_name.set_name(target_ea,original_name,ida_name.SN_CHECK)
             report['checks'].append('real identifier hit-testing: Enter/double-click follow _f1387; history restores caller')
         manager.open_function(index)
+        ask_str = ui.ask_str
+        ui.ask_str = lambda *args:'uint64_t'
+        try:
+            viewer.Jump(viewer.text_start,0)
+            viewer.OnKeydown(ord('Y'),0)
+        finally:
+            ui.ask_str = ask_str
+        assert viewer.result.text.startswith('uint64_t '), (viewer.GetPos(), session.settings['display_types'], viewer.result.text[:120])
+        assert wasm_api.decompile(ea).text.startswith('uint64_t ')
+        assert 'uint64_t integration_renamed(' in wasm_api.export_text([ea])
+        comment_line = next(iter(viewer.result.source_map))
+        viewer.Jump(viewer.text_start + comment_line - 1,0)
+        ask_text = ui.ask_text
+        ui.ask_text = lambda *args:'integration comment'
+        try:
+            viewer.OnKeydown(ord('/'),0)
+        finally:
+            ui.ask_text = ask_text
+        assert '// integration comment' in viewer.result.text
+        assert '// integration comment' in wasm_api.export_text([ea])
+        assert '// integration comment' in wasm_api.decompile(ea).text
+        number_function = next((f for f in session.module.functions if not f.imported and
+                                any(span[4] in range(32,127) for spans in session.result(f.index).number_spans.values() for span in spans)),None)
+        if number_function:
+            manager.open_function(number_function.index)
+            line,span = next((line,span) for line,spans in viewer.result.number_spans.items()
+                             for span in spans if span[4] in range(32,127))
+            viewer.Jump(viewer.text_start + line - 1,span[0])
+            viewer.OnKeydown(ord('H'),0)
+            assert '0x' in viewer.result.text
+            changed_line = next(line for line,spans in viewer.result.number_spans.items()
+                                if any(item[2:5] == span[2:5] for item in spans))
+            changed_span = next(item for item in viewer.result.number_spans[changed_line]
+                                if item[2:5] == span[2:5])
+            viewer.Jump(viewer.text_start + changed_line - 1,changed_span[0])
+            viewer.OnKeydown(ord('R'),0)
+            assert "'" + chr(span[4]) + "'" in viewer.result.text
+            assert "'" + chr(span[4]) + "'" in wasm_api.decompile(session.ea(number_function.code_offset)).text
+            manager.open_function(index)
+        report['checks'].append('Y, comments, H/R display choices in viewer, API and exports')
         local = next((name for name,s in viewer.result.symbols.items() if s['kind']=='local' and any(re.search(r'\b'+re.escape(name)+r'\b',ida_lines.tag_remove(viewer.GetLine(row)[0])) for row in range(viewer.Count()))),None)
         if local:
             point_at(local)
@@ -240,6 +291,14 @@ try:
             finally:
                 ui.ask_str = ask
             assert 'integration_local' in viewer.result.text
+            point_at('integration_local')
+            ui.ask_str = lambda *args:'signed int'
+            try:
+                viewer.OnKeydown(ord('Y'),0)
+            finally:
+                ui.ask_str = ask
+            assert 'signed int integration_local' in viewer.result.text
+            assert 'signed int integration_local' in wasm_api.decompile(ea).text
             report['checks'].append('viewer local rename with actual cursor hit-testing')
 
         # G opens the address dialog, and mapped code addresses open pseudocode.
@@ -273,6 +332,15 @@ try:
             name = session.global_names()[global_index]
             point_at(name)
             assert viewer.resolve_symbol()[1]['ea'] == global_ea
+            ask_type = ui.ask_str
+            ui.ask_str = lambda *args:'signed int'
+            try:
+                viewer.OnKeydown(ord('Y'),0)
+            finally:
+                ui.ask_str = ask_type
+            assert f'extern signed int {name};' in viewer.result.text
+            assert f'signed int {name};' in wasm_api.export_text([source])
+            point_at(name)
             choose_xref = ui.choose_xref
             selected_targets = []
             ui.choose_xref = lambda ea:(selected_targets.append(ea) or source)
@@ -308,6 +376,20 @@ try:
             ui.ask_file = old_ask_file
         assert export_path.is_file() and 'integration_renamed' in export_path.read_text()
         report['checks'].append('interactive module export')
+        other = next(f for f in session.module.functions if not f.imported and f.index != index)
+        selection = ui.read_range_selection
+        ask_file = ui.ask_file
+        ui.read_range_selection = lambda widget:(True,ea,ea+1)
+        ui.ask_file = lambda *args:str(export_path)
+        try:
+            viewer.OnKeydown(ui.IK_F5,ui.VES_CTRL)
+        finally:
+            ui.read_range_selection = selection
+            ui.ask_file = ask_file
+        selected_export = export_path.read_text()
+        assert session.result(index).text in selected_export
+        assert session.result(other.index).text not in selected_export
+        report['checks'].append('Ctrl+F5 exports only functions overlapping selected range')
         viewer.Close()
         assert index not in manager.views
         manager.open_function(index)

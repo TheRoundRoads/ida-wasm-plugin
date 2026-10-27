@@ -79,7 +79,7 @@ Settings and analysis already saved in databases remain in those databases.
 
 1. Open a `.wasm` file with IDA's built-in WebAssembly loader.
 2. Let IDA finish its initial analysis.
-3. Place the cursor inside a function and press **Tab**. The plugin can also be
+3. Place the cursor inside a function and press **Tab** or **F5**. The plugin can also be
    opened through **Edit → Plugins → Wasm decompiler**.
 4. Follow function names with **Enter** or a **double-click**. The same viewer
    displays the callee; **Escape** returns to the caller and restores the cursor.
@@ -88,19 +88,26 @@ Settings and analysis already saved in databases remain in those databases.
 | --- | --- |
 | **Tab** | Toggle between disassembly and pseudocode. |
 | **Enter / double-click** | Follow a function in the same viewer; follow globals to their database identity. |
+| **Ctrl+Enter** | Follow a function in a new pseudocode window. |
 | **Escape / Alt-Left** | Go back; Escape returns to disassembly when there is no history. |
 | **Alt-Right** | Go forward through pseudocode history. |
 | **G** | Open IDA's Go to address/symbol dialog. Code destinations open pseudocode; data destinations open the data view. |
 | **X** | Show references to the function/global under the cursor; show in-function uses for a local. |
 | **J** | Jump to the current line's underlying Wasm instruction. |
 | **N** | Rename the function, global, or local under the cursor. |
-| **R** | Refresh after database edits. |
+| **F5** | Open pseudocode from disassembly, or refresh the current pseudocode. |
+| **Ctrl+F5** | Export selected functions from a disassembly range, or the whole module when no range is selected. |
+| **Y** | Change the displayed type of a return value, parameter, local, or global. This does not change the Wasm. |
+| **/** / **Ins** | Add an indented or block comment. Comments are saved in the IDA database. |
+| **H** / **R** | Toggle hexadecimal/decimal display or display the selected integer as a character. Only that literal occurrence changes. |
 | **E** | Export the current function's pseudocode. |
 
 The viewer's context menu also provides **module export**, refresh, navigation,
 and a **C stack pointer** override. Enter a mutable i32 global index for the stack
 pointer, or `auto` to restore automatic detection. Tab applies to Wasm disassembly
 and this plugin's viewer; other architectures and IDA widgets keep their bindings.
+Type edits, comments, and literal formatting also appear in exported pseudocode and
+the `ida_wasm_decompiler.decompile()` API. **M** is currently unassigned.
 
 ### IDAPython decompilation API
 
